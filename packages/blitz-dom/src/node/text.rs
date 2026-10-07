@@ -775,6 +775,43 @@ impl TextInputData {
         None
     }
 
+    /// End an in-progress composition because the input is losing focus.
+    ///
+    /// The IME may not commit the preedit text in this case (fcitx5 sends `Disabled` and an
+    /// empty preedit to the newly focussed node instead), so the preedit text is kept, as
+    /// browsers do.
+    pub(crate) fn finish_composition(
+        &mut self,
+        font_ctx: &mut FontContext,
+        layout_ctx: &mut LayoutContext<TextBrush>,
+    ) -> Vec<GeneratedTextInputEvent> {
+        if self.composition_state == CompositionState::Idle {
+            return Vec::new();
+        }
+        self.composition_state = CompositionState::Idle;
+
+        let preedit = self
+            .editor
+            .raw_compose()
+            .clone()
+            .map(|range| (self.editor.raw_text()[range.clone()].to_string(), range.end))
+            .filter(|(text, _)| !text.is_empty());
+        match preedit {
+            Some((text, end)) => {
+                let mut driver = self.editor.driver(font_ctx, layout_ctx);
+                driver.finish_compose();
+                // The IME cursor may select part of the preedit; place the caret after it
+                driver.move_to_byte(end);
+                vec![
+                    GeneratedTextInputEvent::CompositionUpdate(text.clone()),
+                    GeneratedTextInputEvent::Input,
+                    GeneratedTextInputEvent::CompositionEnd(text),
+                ]
+            }
+            None => vec![GeneratedTextInputEvent::CompositionEnd(String::new())],
+        }
+    }
+
     pub(crate) fn apply_ime_event(
         &mut self,
         font_ctx: &mut FontContext,

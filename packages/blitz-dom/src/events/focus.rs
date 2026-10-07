@@ -1,5 +1,7 @@
 use blitz_traits::events::{BlitzFocusEvent, DomEvent, DomEventData};
 
+use super::ime::finish_composition;
+
 use crate::BaseDocument;
 
 pub(crate) fn generate_focus_events(
@@ -17,6 +19,9 @@ pub(crate) fn generate_focus_events(
     }
 
     if let Some(old_focus) = old_focus {
+        // As in browsers, an IME composition ends before the input is blurred
+        finish_composition(doc, old_focus, dispatch_event);
+
         dispatch_event(DomEvent::new(
             old_focus,
             DomEventData::Blur(BlitzFocusEvent),
