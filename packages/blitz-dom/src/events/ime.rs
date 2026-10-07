@@ -1,4 +1,5 @@
 use blitz_traits::events::{BlitzImeEvent, DomEvent};
+use blitz_traits::node_id::NodeId;
 
 use crate::BaseDocument;
 
@@ -26,6 +27,25 @@ pub(crate) fn handle_ime_event<F: FnMut(DomEvent)>(
 
             #[cfg(feature = "tracing")]
             tracing::debug!(node_id = ?node_id, "Sent ime event");
+        }
+    }
+}
+
+/// End any IME composition in progress on `node_id`, which is about to lose focus
+pub(crate) fn finish_composition(
+    doc: &mut BaseDocument,
+    node_id: NodeId,
+    dispatch_event: &mut dyn FnMut(DomEvent),
+) {
+    let text_input_data = doc.nodes[node_id]
+        .data
+        .downcast_element_mut()
+        .and_then(|el| el.text_input_data_mut());
+    if let Some(input_data) = text_input_data {
+        let generated_events =
+            input_data.finish_composition(&mut doc.font_ctx.lock().unwrap(), &mut doc.layout_ctx);
+        for generated_event in generated_events {
+            doc.apply_generated_text_input_event(node_id, generated_event, &mut *dispatch_event);
         }
     }
 }

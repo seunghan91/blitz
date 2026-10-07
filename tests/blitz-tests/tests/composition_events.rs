@@ -329,3 +329,87 @@ fn key_events_report_is_composing_during_composition() {
     harness.pump();
     assert!(harness.text_content("#log").ends_with("|keydown:true"));
 }
+
+fn two_inputs_app() -> Element {
+    let mut log = use_signal(Vec::<String>::new);
+    rsx! {
+        input {
+            id: "text",
+            r#type: "text",
+            style: "width:200px; height:20px; display:block;",
+            oncompositionupdate: move |evt| log.write().push(format!("update:{}", evt.data().data())),
+            oncompositionend: move |evt| log.write().push(format!("end:{}", evt.data().data())),
+            oninput: move |evt| log.write().push(format!("input:{}", evt.value())),
+            onblur: move |_| log.write().push("blur".into()),
+        }
+        input {
+            id: "other",
+            r#type: "text",
+            style: "width:200px; height:20px; display:block;",
+            oncompositionend: move |evt| log.write().push(format!("other-end:{}", evt.data().data())),
+            onfocus: move |_| log.write().push("focus-other".into()),
+        }
+        div { id: "log", "{log.read().join(\"|\")}" }
+    }
+}
+
+#[test]
+fn blur_commits_preedit_and_ends_composition() {
+    let mut harness = Harness::from_component(two_inputs_app);
+    harness.click("#text");
+    harness.ime(preedit("하"));
+    harness.click("#other");
+    // fcitx5 then sends these to the newly focussed input, without a commit
+    for event in [BlitzImeEvent::Disabled, BlitzImeEvent::Enabled, preedit("")] {
+        harness.ime(event);
+    }
+    assert_eq!(
+        harness.text_content("#log"),
+        "update:하|update:하|input:하|end:하|blur|focus-other"
+    );
+    assert_value(&harness, "하");
+}
+
+#[test]
+fn blur_after_empty_preedit_ends_composition_without_data() {
+    let mut harness = Harness::from_component(two_inputs_app);
+    harness.click("#text");
+    harness.ime(preedit("a"));
+    harness.ime(preedit(""));
+    harness.click("#other");
+    assert_eq!(
+        harness.text_content("#log"),
+        "update:a|end:|blur|focus-other"
+    );
+    assert_value(&harness, "");
+}
+
+#[test]
+fn blur_without_composition_generates_no_composition_events() {
+    let mut harness = Harness::from_component(two_inputs_app);
+    harness.click("#text");
+    harness.ime(commit("x"));
+    harness.click("#other");
+    assert_eq!(harness.text_content("#log"), "input:x|blur|focus-other");
+}
+
+#[test]
+fn blur_places_caret_after_committed_preedit() {
+    let mut harness = Harness::from_component(two_inputs_app);
+    harness.click("#text");
+    // The IME selects the whole preedit
+    harness.ime(BlitzImeEvent::Preedit("abc".into(), Some((0, 3))));
+    harness.click("#other");
+    let doc = harness.base();
+    let editor = &doc
+        .get_node(harness.node("#text"))
+        .unwrap()
+        .element_data()
+        .unwrap()
+        .text_input_data()
+        .unwrap()
+        .editor;
+    assert_eq!(editor.text(), "abc");
+    assert!(editor.raw_selection().is_collapsed());
+    assert_eq!(editor.raw_selection().focus().index(), 3);
+}
