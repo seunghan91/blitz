@@ -113,7 +113,8 @@ impl BaseDocument {
 
         match event {
             GeneratedTextInputEvent::Input => {
-                let value = input_data.editor.raw_text().to_string();
+                // Like `set_text` and form submission, report the text without the IME preedit.
+                let value = input_data.editor.text().to_string();
                 dispatch_event(DomEvent::new(
                     node_id,
                     DomEventData::Input(BlitzInputEvent { value }),

@@ -185,6 +185,19 @@ fn enabled_and_delete_surrounding_do_not_end_composition() {
     assert_value(&harness, "a");
 }
 
+fn assert_raw_value<D: blitz_dom::Document>(harness: &Harness<D>, expected: &str) {
+    let doc = harness.base();
+    let element = doc
+        .get_node(harness.node("#text"))
+        .unwrap()
+        .element_data()
+        .unwrap();
+    assert_eq!(
+        element.text_input_data().unwrap().editor.raw_text(),
+        expected
+    );
+}
+
 #[test]
 fn composition_event_metadata() {
     let data = BlitzCompositionEvent { data: "한".into() };
@@ -338,4 +351,83 @@ fn key_events_report_is_composing_during_composition() {
     harness.dispatch(UiEvent::KeyDown(composing_down));
     harness.pump();
     assert!(harness.text_content("#log").ends_with("|keydown:true"));
+}
+
+fn delete_surrounding(before_bytes: usize, after_bytes: usize) -> BlitzImeEvent {
+    BlitzImeEvent::DeleteSurrounding {
+        before_bytes,
+        after_bytes,
+    }
+}
+
+#[test]
+fn delete_surrounding_deletes_bytes_around_the_caret() {
+    let mut harness = input_harness();
+    record(&mut harness, [commit("가나다")]);
+
+    // Hangul syllables are three bytes each in UTF-8
+    assert_eq!(record(&mut harness, [delete_surrounding(3, 0)]), ["input"]);
+    assert_value(&harness, "가나");
+
+    // A range that does not end on a char boundary is ignored
+    assert!(record(&mut harness, [delete_surrounding(1, 0)]).is_empty());
+    assert_value(&harness, "가나");
+
+    // Nothing after the caret to delete
+    assert!(record(&mut harness, [delete_surrounding(0, 3)]).is_empty());
+    assert_value(&harness, "가나");
+}
+
+#[test]
+fn delete_surrounding_keeps_the_preedit() {
+    let mut harness = input_harness();
+    record(&mut harness, [commit("가나"), preedit("ㄷ")]);
+    assert_eq!(record(&mut harness, [delete_surrounding(3, 0)]), ["input"]);
+    assert_value(&harness, "가");
+    assert_raw_value(&harness, "가ㄷ");
+    assert_eq!(
+        record(&mut harness, [commit("다")]),
+        ["compositionupdate", "input", "compositionend"]
+    );
+    assert_value(&harness, "가다");
+}
+
+#[test]
+fn keys_do_not_edit_the_field_while_composing() {
+    use keyboard_types::{Key, NamedKey};
+
+    let mut harness = input_harness();
+    record(&mut harness, [commit("ab"), preedit("가")]);
+    // Character keys are handled by the text input on every platform (unlike Backspace, which
+    // macOS delivers as a standard key binding), so they show whether the guard applies.
+    harness.press(Key::Character("x".into()));
+    harness.press(Key::Named(NamedKey::Enter));
+    assert_eq!(
+        record(&mut harness, [commit("가")]),
+        ["compositionupdate", "input", "compositionend"]
+    );
+    assert_value(&harness, "ab가");
+
+    // Once the composition has ended, keys edit the field again
+    harness.press(Key::Character("x".into()));
+    assert_value(&harness, "ab가x");
+
+    // Application shortcuts still apply while composing
+    let action_mod = if cfg!(target_os = "macos") {
+        keyboard_types::Modifiers::META
+    } else {
+        keyboard_types::Modifiers::CONTROL
+    };
+    record(&mut harness, [preedit("나")]);
+    harness.press_with(Key::Character("a".into()), action_mod);
+    let doc = harness.base();
+    let editor = &doc
+        .get_node(harness.node("#text"))
+        .unwrap()
+        .element_data()
+        .unwrap()
+        .text_input_data()
+        .unwrap()
+        .editor;
+    assert!(!editor.raw_selection().is_collapsed());
 }

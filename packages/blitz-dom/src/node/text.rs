@@ -3,6 +3,8 @@ use blitz_traits::{
     node_id::NodeId,
     shell::ShellProvider,
 };
+use core::num::NonZeroUsize;
+
 use keyboard_types::{Key, Modifiers, NamedKey};
 use parley::{ContentWidths, FontContext, InlineBoxKind, LayoutContext};
 
@@ -266,6 +268,13 @@ impl TextInputData {
         let mods = event.modifiers;
         let shift = mods.contains(Modifiers::SHIFT);
         let action_mod = mods.contains(ACTION_MOD);
+
+        // Keys pressed while the IME is composing belong to the composition (e.g. the Enter that
+        // confirms a candidate), so the text input's own key handling must not act on them.
+        // Application shortcuts (copy, paste, select all) the IME passed on still apply.
+        if self.editor.is_composing() && !action_mod {
+            return None;
+        }
 
         let is_multiline = self.is_multiline;
         let editor = &mut self.editor;
@@ -870,9 +879,34 @@ impl TextInputData {
                 before_bytes,
                 after_bytes,
             } => {
-                let _ = before_bytes;
-                let _ = after_bytes;
-                // TODO
+                if before_bytes == 0 && after_bytes == 0 {
+                    return events;
+                }
+                // winit: remove the preedit, delete around the selection, then insert the
+                // preedit back.
+                let preedit = driver
+                    .editor
+                    .raw_compose()
+                    .clone()
+                    .map(|range| driver.editor.raw_text()[range].to_string());
+                if preedit.is_some() {
+                    driver.clear_compose();
+                }
+                let len_before = driver.editor.raw_text().len();
+                if let Some(before) = NonZeroUsize::new(before_bytes) {
+                    driver.delete_bytes_before_selection(before);
+                }
+                if let Some(after) = NonZeroUsize::new(after_bytes) {
+                    driver.delete_bytes_after_selection(after);
+                }
+                let changed = driver.editor.raw_text().len() != len_before;
+                if let Some(text) = preedit {
+                    driver.set_compose(&text, Some((text.len(), text.len())));
+                    events.push(GeneratedTextInputEvent::PreEditChange);
+                }
+                if changed {
+                    events.push(GeneratedTextInputEvent::Input);
+                }
             }
         }
         events
